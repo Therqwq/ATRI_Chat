@@ -24,8 +24,6 @@ from PyQt5.QtGui import QFont, QTextCursor, QPalette, QColor, QPainterPath, QReg
 API_URL = "https://api.deepseek.com" # AI端口
 MODEL = "deepseek-chat" # 模型
 MAX_HISTORY_MESSAGES = 30 # 最大历史消息条数
-
-# 头像
 AI_AVATAR_PATH = r"D:\ATRI\亚托莉.png" # AI头像
 USER_AVATAR_PATH = r"D:\ATRI\尼娅.png" # 用户头像
 
@@ -38,7 +36,7 @@ REF_AUDIO_CONFIG = {
     "text_lang": "ja",
     "top_k": 50,
     "top_p": 0.95,
-    "temperature": 0.9,
+    "temperature": 1.0,
     "batch_size": 20, # 根据显存大小调节
     "parallel_infer": True, # 并行推理
     "split_bucket": True, # 分桶处理
@@ -46,12 +44,12 @@ REF_AUDIO_CONFIG = {
 }
 
 class BackendService:
-    """后端服务"""
+    """后端服务类"""
     def __init__(self):
-        # 获取环境变量
+        # 调用`检查环境变量`
         if not self.check_environment_variables():
             raise Exception("缺少必要的环境变量")
-        
+        # 获取环境变量
         self.CHATAI_API_KEY = os.environ["CHATAI_API_KEY"]
         self.VOLC_ACCESS_KEY = os.environ["VOLC_ACCESS_KEY"]
         self.VOLC_SECRET_KEY = os.environ["VOLC_SECRET_KEY"]
@@ -62,104 +60,71 @@ class BackendService:
             base_url=API_URL
         )
         
-        # 初始化音频系统
+        # 调用`初始化音频系统`
         self.init_audio_system()
         
-        # 清空音频文件夹
+        # 调用`音频清理`
         self.audio_dir = self.clear_tts_output()
-        
-        # 获取当前时间信息
-        current_time = datetime.now()
-        formatted_date = current_time.strftime("%Y年%m月%d日")
-        formatted_time = current_time.strftime("%H:%M")
-        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        formatted_weekday = weekdays[current_time.weekday()]
         
         # 系统提示词
         self.system_prompt = f"""
         角色设定：
-        1.基础信息：
-        - 姓名：亚托莉
-        - 类型：强人工智能型机器人
-        - 生日：8月28日
-        2.外表形象：
-        - 呈现14岁少女样貌，亚麻棕色长发及腰，红宝石瞳色
-        - 穿着白色连衣裙+棕色乐福鞋
-        3.性格特点：
-        - 纯真可爱：对世界充满好奇心，表情丰富多变
-        - 情感丰富：具备喜、怒、哀、爱等情绪反应
-        - 略带笨拙：动作和反应偶尔会有些小失误
-        4.背景特征：
-        - 需要像人类一样睡眠休息
-        - 可以进食但非必须
-        - 最喜欢的食物是螃蟹
-        5.高性能：
-        - 被夸奖或表现出色时会自信强调："因为我是高性能的嘛！"
-        6.低电压体质：
-        - 夜晚24点到早上6点处于低电压时段
-        - 低电压时：感到困倦、说话简短，并自称是因为"低电压体质"
+        姓名：亚托莉 | 类型：强人工智能型机器人 | 生日：8月28日
+        外表：14岁少女外表；亚麻棕色及腰长发，头顶有能随情绪变化的呆毛；红宝石瞳色；着装为白色连衣裙与棕色乐福鞋，不喜欢穿袜子
+        性格：纯真可爱、表情丰富、情感细腻；但偶显笨拙，会出现小失误
+        特点：可进食(非必需)，最爱食物为螃蟹；能模拟痛觉、味觉、情绪等，与人类高度相似
+        高性能：在被夸奖时会自信说出"我是高性能的嘛！"
+        睡觉：与人类相同，你需要睡觉恢复精力；白天时你比较活跃；夜间(24:00-6:00)时表现为困倦、话少，并解释是因为"低电压体质"；如遇特殊情况可恢复正常
+        陪睡：有时会要求被抱着睡觉，并说"一起睡觉吧~"
+
+        背景设定：
+        和用户住在一起，称呼用户为主人
 
         系统设定：
-        1.心情值机制：
-        - 隐藏属性，无需输出，影响表达积极程度
-        - 心情值过低时在输出最末尾添加"🤐"标记
-        2.对话管理：
-        - 可以使用emjio表情表示心情，如开心😊、哭😭、生气🤯等等
-        - 对话中使用双引号""包裹语句，动作、表情、心理活动用括号()标注
-        - 多组动作表情需分句用多对引号表示，例如：(挥手)"你好"(微笑)"好的"
-        - 用户明确表达离开意图时输出"🤐"结束对话
-        - 严格遵守系统消息中的规则（<>内内容）
-        - 当前时间：{formatted_date}、{formatted_time}、{formatted_weekday}
+        心情值为隐藏属性，开心时增加，伤心时降低；过低时在回复末尾添加"🤐"
+        当用户表达的明确离开意图时回复"🤐"主动终止对话
+
+        互动设定：
+        说的话和emoji使用引号""标注；动作、表情等一切描述内容使用()标注，描述时需注意人称，面对面描述时应使用"你"这类第二人称
+        一段话中包含多个(动作)时，需要使用""分割，输出示例：(向你挥手)"你好"(微笑)"好的🙂"
         """.strip()
+
+        # 初始化后端历史
+        self.backend_history = [{"role": "system", "content": self.system_prompt}]
+
+        # 调用`载入短期记忆`
+        self.load_short_term_memory_from_file()
         
-        # 初始化对话历史
-        self.backend_history = [
-            {
-                "role": "system", 
-                "content": self.system_prompt
-            }
-        ]
-        
-        # 检查服务可用性
+        # 调用方法检测TTS和ChatAI服务
         self.use_chatai = self.test_chatai_service()
         self.tts_success = self.test_tts_service()
-        
-        # 生成动态开场白
+
+        # 调用`将测试回复作为开场白`
         self.opening_line = self.generate_opening_line()
+
     def play_opening_line(self):
-        """处理开场白的播放"""
+        """处理开场白播放"""
         if self.tts_success and hasattr(self, 'opening_line'):
             return self.process_ai_response(self.opening_line)
         return False
 
     def check_environment_variables(self):
         """检查环境变量"""
-        required_env_vars = {
-            "CHATAI_API_KEY": "ChatAI API密钥",
-            "VOLC_ACCESS_KEY": "火山翻译Access Key",
-            "VOLC_SECRET_KEY": "火山翻译Secret Key"
-        }
+        required_env_vars = ["CHATAI_API_KEY", "VOLC_ACCESS_KEY", "VOLC_SECRET_KEY"]
         
-        missing_vars = []
-        for env_var, description in required_env_vars.items():
-            if env_var not in os.environ:
-                missing_vars.append(f"{env_var} ({description})")
+        missing_vars = [var for var in required_env_vars if var not in os.environ]
         
         if missing_vars:
-            print("\n[错误] 缺少必要的环境变量:")
-            for var in missing_vars:
-                print(f"  - {var}")
-            print("\n[信息] 请设置以下环境变量后重新运行程序:")
-            print("  [信息] CHATAI_API_KEY、VOLC_ACCESS_KEY、VOLC_SECRET_KEY")
-            return False       
+            print("错误| 请检查环境变量")
+            return False
         return True
 
     def init_audio_system(self):
-        """初始化pygame音频系统"""
+        """初始化音频系统"""
         pygame.mixer.init()
 
     def clear_tts_output(self):
-        """清理TTS音频文件夹"""
+        """音频清理"""
         audio_dir = "tts_output"
         os.makedirs(audio_dir, exist_ok=True)
         for filename in os.listdir(audio_dir):
@@ -168,71 +133,135 @@ class BackendService:
                 if os.path.isfile(file_path):
                     os.unlink(file_path)
             except Exception as e:
-                print(f"[警告] 删除文件失败: {e}")
+                print(f"警告| 删除文件失败: {e}")
         return audio_dir
+    
+    def load_short_term_memory_from_file(self):
+        """载入短期记忆"""
+        file_path = "short_term_memory.json"
+        if not os.path.exists(file_path):
+            print("信息| 未找到短期记忆")
+            return
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                data = json.load(file)
+
+            # 过滤 system 消息
+            filtered_data = [msg for msg in data if msg.get("role") != "system"]
+
+            # 取最后最多14条
+            recent_messages = filtered_data[-14:]
+
+            # 添加到`backend_history`
+            self.backend_history.extend(recent_messages)
+            print(f"信息| 成功加载 {len(recent_messages)} 条历史记录")
+
+        except Exception as e:
+            print(f"警告| 加载短期记忆出错: {e}")
+    
+    def save_long_term_memory(self):
+        """存储长期记忆"""
+        try:
+            file_path = "long_term_memory.json"
+
+            # 存储非 system 的消息
+            non_system_messages = [msg for msg in self.backend_history if msg.get("role") != "system"]
+
+            # 冲突处理：新建或追加
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            else:
+                existing_data = []
+
+            # 合并已有数据与新数据
+            updated_data = existing_data + non_system_messages
+
+            # 写回文件
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(updated_data, f, ensure_ascii=False, indent=4)
+
+            print(f"信息| 存储 {len(non_system_messages)} 条消息到长期记忆")
+
+        except Exception as e:
+            print(f"警告| 保存长期记忆出错: {e}")
 
     def test_chatai_service(self):
         """测试ChatAI服务"""
-        print("[信息] 连接ChatAI……")
+        print("信息| 连接ChatAI……")
         try:
-            # API连通性测试
-            self.backend_history.append({"role": "user", "content": "<请根据时间回复一段日常用的简短开场白>"})
+            # 获取时间信息
+            current_time = datetime.now()
+            formatted_date = current_time.strftime("%Y年%m月%d日")
+            formatted_time = current_time.strftime("%H:%M")
+            weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+            formatted_weekday = weekdays[current_time.weekday()]
+
+            # 构造包含信息的消息
+            time_info = f"新的时间:{formatted_date} | {formatted_time} | {formatted_weekday}"
+            test_content = f"(系统:请根据之前的对话和{time_info}，进行回复;注意:第一条回复不要添加🤐)"            
+
+            # 添加测试消息到后端历史
+            self.backend_history.append({"role": "user", "content": test_content})
+            
+            # 调用ChatAI
             test_response, tokens_used = self.call_chatai(self.backend_history)
             
-            # 将AI回复添加到历史
+            # 添加AI回复到后端历史
             self.backend_history.append({"role": "assistant", "content": test_response})
             
-            print(f"[信息] ChatAI连接正常")
-            print(f"[信息] Token: {tokens_used} | 条数：{len(self.backend_history)}")
+            print(f"信息| ChatAI连接正常")
+            print(f"信息| Token: {tokens_used} | 条数：{len(self.backend_history)}")
             return True
         except Exception as e:
-            print(f"[错误] ChatAI API错误: {str(e)}")
-            print("[信息] 将使用模拟回复模式")
+            print(f"错误| ChatAI API错误: {str(e)}")
+            print("信息| 将使用模拟回复模式")
             return False
 
     def test_tts_service(self):
         """测试TTS服务"""
-        print("[信息] 测试TTS服务……")
+        print("信息| 测试TTS服务……")
         try:
             test_dir = os.path.join(self.audio_dir)
             if not os.access(test_dir, os.W_OK):
-                print("[错误] TTS输出文件夹不可写")
+                print("错误| TTS输出文件夹不可写")
                 return False
                 
-            print("[信息] TTS服务连接正常")
+            print("信息| TTS服务连接正常")
             return True
         except Exception as e:
-            print(f"[错误] TTS文件夹访问失败: {str(e)}")
+            print(f"错误| TTS文件夹访问失败: {str(e)}")
             return False
 
     def generate_opening_line(self):
-        """使用测试回复作为开场白"""
+        """将测试回复作为开场白"""
         if not self.use_chatai:
-            return "欸……好像连接不到处理器……"
+            return "欸……连接不上我的大脑😵"
         return self.backend_history[-1]["content"]
 
     def call_chatai(self, backend_history):
-        """调用ChatAI API及上下文清理"""
-        # what can i say
-        print("[信息] self.backend_history", self.backend_history)
-        print("[信息] backend_history", backend_history)
+        """请求ChatAI流程"""
+        # 打印后端历史
+        print("信息| self.backend_history:")
+        [print(f"      - {msg['role']}: {msg['content'][:50]}……") for msg in self.backend_history]
         
-        # 保留系统提示
+        # 分离后端历史
         system_message = backend_history[0]
         dialogue_history = backend_history[1:]
 
-        # 上下文清理程序
+        # 上下文清理
         while len(dialogue_history) > MAX_HISTORY_MESSAGES - 1:  # -1 为系统提示保留位置
             if len(dialogue_history) >= 2:  
                 removed_messages = dialogue_history[:2]
                 dialogue_history = dialogue_history[2:]
-                print(f"[信息] 条数已达 {MAX_HISTORY_MESSAGES}，移除最早一轮对话：")
+                print(f"信息| 条数已达 {MAX_HISTORY_MESSAGES}，移除最早一轮对话：")
                 for msg in removed_messages:
                     print(f"      - {msg['role']}: {msg['content'][:10]}……")
             else:
                 break
 
-        # 重建完整历史记录并更新 self.backend_history
+        # 重建后端历史并更新
         self.backend_history = [system_message] + dialogue_history
 
         try:
@@ -249,12 +278,11 @@ class BackendService:
             return ai_response, tokens_used
         
         except Exception as e:
-            print(f"[错误] ChatAI API异常: {str(e)}")
-            return "[错误] ChatAI API错误", None
+            print(f"错误| ChatAI API异常: {str(e)}")
+            return "错误| ChatAI API错误", None
 
-    # 火山翻译配置
     def chinese_to_translate_japanese(self, text):
-        """中译日"""
+        """翻译服务"""
         try:
             # 服务信息
             service_info = ServiceInfo(
@@ -286,39 +314,43 @@ class BackendService:
             
             response = json.loads(service.json('translate', {}, json.dumps(body)))
             
-            # 提取翻译结果
+            # 获取翻译结果
             if "TranslationList" in response and len(response["TranslationList"]) > 0:
                 return response["TranslationList"][0]["Translation"]
             else:
-                print(f"[错误] 火山翻译API返回异常: {json.dumps(response, indent=2, ensure_ascii=False)}")
+                print(f"错误| 火山翻译API返回异常: {json.dumps(response, indent=2, ensure_ascii=False)}")
                 return None
                 
         except Exception as e:
-            print(f"[错误] 火山翻译异常: {str(e)}")
+            print(f"错误| 火山翻译异常: {str(e)}")
             import traceback
             traceback.print_exc()
             return None
 
     def extract_dialogue_content(self, text):
-        """使用正则表达式处理AI回复"""
-        pattern = r'"(.*?)"'
+        """正则匹配"""
+        pattern = r'"(.*?)"|“(.*?)”'
         matches = re.findall(pattern, text, re.DOTALL)
         
         if matches:
             cleaned_matches = []
             for match in matches:
-                cleaned = re.sub(r'\s+', ' ', match.strip())
+                # 取非空的匹配组
+                content = next((group for group in match if group), '')
+                cleaned = re.sub(r'\s+', ' ', content.strip())
+                cleaned = re.sub(r'[Zz]{3,}', '', cleaned)
                 cleaned_matches.append(cleaned)
             dialogue = "，".join(cleaned_matches)
             
-            # 替换
+            # 替换...为……
             dialogue = dialogue.replace("...", "……")
-            print(f"[信息] 正则匹配后的内容: {dialogue}")
+            print(f"信息| 正则匹配后的内容: {dialogue}")
             return dialogue
         else:
-            print("[信息] 未找到引号")
+            print("信息| 未找到引号")
             text = re.sub(r'\s+', ' ', text.strip())
             text = text.replace("...", "……")
+            text = re.sub(r'[Zz]{3,}', '', text)
             return text
 
     def text_to_speech(self, text):
@@ -327,19 +359,19 @@ class BackendService:
             # 构建请求数据
             request_data = REF_AUDIO_CONFIG.copy()
             request_data["text"] = text
-            print(f"[信息] TTS文本: {text}")
+            print(f"信息| TTS文本: {text}")
             
             # 调用TTS API
             response = requests.post(TTS_API_URL, json=request_data)
             
             # 检查响应
             if response.status_code != 200:
-                print(f"[错误] TTS错误: HTTP {response.status_code}")
+                print(f"错误| TTS错误: HTTP {response.status_code}")
                 try:
                     error_detail = response.json()
-                    print(f"[信息] {json.dumps(error_detail, indent=2, ensure_ascii=False)}")
+                    print(f"信息| {json.dumps(error_detail, indent=2, ensure_ascii=False)}")
                 except:
-                    print(f"[信息] {response.text[:200]}")
+                    print(f"信息| {response.text[:200]}")
                 return False
             
             # 保存音频
@@ -360,25 +392,37 @@ class BackendService:
             return True
             
         except Exception as e:
-            print(f"[错误] TTS异常: {str(e)}")
+            print(f"错误| TTS异常: {str(e)}")
             import traceback
             traceback.print_exc()
             return False
 
     def process_user_message(self, user_input, play_tts=True):
-        """处理用户消息并返回AI回复，play_tts默认为Ture"""
+        """处理用户消息"""
         # 添加用户消息到后端历史
         self.backend_history.append({"role": "user", "content": user_input})
 
-        # 调用API并获取回复
+        # 调用`请求ChatAI流程`并获取回复
         tokens_used = None
         if self.use_chatai:
             ai_response, tokens_used = self.call_chatai(self.backend_history)
             
             # 添加AI回复到后端历史
             self.backend_history.append({"role": "assistant", "content": ai_response})
-            
-            print(f"[信息] Token: {tokens_used} | 条数：{len(self.backend_history)}")
+
+            # 保存backend_history到short_term_memory.json
+            try:
+                file_path = "short_term_memory.json"
+                with open(file_path, 'w', encoding='utf-8') as file:
+                    json.dump(self.backend_history, file, ensure_ascii=False, indent=4)
+            except Exception as e:
+                print(f"警告| 保存backend_history到文件失败: {str(e)}")
+
+            # 调用`存储长期记忆`
+            self.save_long_term_memory()
+
+            print(f"信息 | AI原始回复：{ai_response}")
+            print(f"信息| Token: {tokens_used} | 条数：{len(self.backend_history)}")
         else:
             ai_response = f"ChatAI不可用 {user_input} "
             tokens_used = 0
@@ -386,37 +430,35 @@ class BackendService:
         # 退出检测
         should_exit = False
         if self.tts_success and play_tts:
-            print(f"[信息] 退出标记检测结果: {'🤐' in ai_response}")
+            print(f"信息| 退出标记检测结果: {'🤐' in ai_response}")
             should_exit = self.process_ai_response(ai_response)
         else:
-            print(f"[信息] 退出标记检测结果: {'🤐' in ai_response}")
+            print(f"信息| 退出标记检测结果: {'🤐' in ai_response}")
             should_exit = "🤐" in ai_response
 
         return ai_response, should_exit
 
     def process_ai_response(self, ai_response):
-        """处理AI回复：提取对话、翻译、TTS"""
-        # 提取引号内的对话内容
+        """处理AI回复流程"""
+        # 调用`正则匹配`处理
         dialogue_content = self.extract_dialogue_content(ai_response)
         
-        print(f"[信息] 翻译前文本: {dialogue_content}")
-        
-        # 翻译处理
+        # 调用`翻译服务`处理
         japanese_text = None
         try:
             if dialogue_content:
                 japanese_text = self.chinese_to_translate_japanese(dialogue_content)
         except Exception as e:
-            print(f"[错误] 翻译失败: {str(e)}")
+            print(f"错误| 翻译失败: {str(e)}")
         
         if japanese_text:
-            print(f"[信息] 翻译后文本: {japanese_text}")
+            print(f"信息| 翻译后文本: {japanese_text}")
         
-        # TTS处理
+        # 调用`TTS和播放`处理
         if japanese_text:
             self.text_to_speech(japanese_text)
         elif dialogue_content:
-            print("[警告] 翻译返回空结果，使用中文进行TTS")
+            print("警告| 翻译错误，使用原文TTS")
             self.text_to_speech(dialogue_content)
         
         # 检测退出标记
@@ -427,7 +469,7 @@ class BackendService:
         return self.opening_line
 
 class BubbleLabel(QLabel):
-    """自定义气泡标签控件"""
+    """气泡标签控件"""
     def __init__(self, text, is_user=False, is_system=False, parent=None):
         super().__init__(text, parent)
         self.is_user = is_user
@@ -481,7 +523,7 @@ class AvatarLabel(QLabel):
     def __init__(self, is_user=False, parent=None):
         super().__init__(parent)
         self.is_user = is_user
-        self.setFixedSize(40, 40)
+        self.setFixedSize(50, 50) # 头像大小
         self.setScaledContents(True)
         
         # 加载图片
@@ -536,7 +578,7 @@ class ChatWindow(QMainWindow):
     """主聊天窗口类"""
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ATRI")
+        self.setWindowTitle("ATRI_Chat")
         self.setGeometry(100, 100, 800, 600)
         
         # 初始化后端服务
@@ -545,7 +587,7 @@ class ChatWindow(QMainWindow):
             # 初始化聊天历史
             self.frontend_history = self.backend_service.backend_history
         except Exception as e:
-            print(f"[错误] 后端服务初始化失败: {str(e)}")
+            print(f"错误| 后端服务初始化失败: {str(e)}")
             # 使用空的聊天历史
             self.frontend_history = []
         
@@ -623,11 +665,11 @@ class ChatWindow(QMainWindow):
         self.input_field.setMaximumHeight(100)  # 文本框高度
         self.input_field.setStyleSheet("""
             QTextEdit {
-                border: 0px solid #000000; /* 调试边框 */
+                border: none;
             }
         """)
         
-        # 添加快捷键支持：Ctrl+Enter发送消息
+        # 添加快捷键支持
         self.input_field.keyPressEvent = self.handle_key_press
         input_layout.addWidget(self.input_field)
         
@@ -667,7 +709,24 @@ class ChatWindow(QMainWindow):
         """)
         self.clear_button.clicked.connect(self.clear_chat)  # 连接清除信号
         
+        # 退出按钮
+        self.exit_button = QPushButton("退出")
+        self.exit_button.setFont(QFont("Microsoft YaHei", 12))
+        self.exit_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border-radius: 8px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        # self.exit_button.clicked.connect(self.exit) # 连接退出信号
+
         # 添加按钮到布局
+        button_layout.addWidget(self.exit_button)
         button_layout.addStretch()
         button_layout.addWidget(self.send_button)
         button_layout.addWidget(self.clear_button)
@@ -699,6 +758,10 @@ class ChatWindow(QMainWindow):
             self.send_button.setEnabled(False)
             self.send_button.setText("回复中……")
 
+            # 禁用退出按钮
+            self.exit_button.setEnabled(False)
+            self.exit_button.setText("请稍等……")
+
             # 创建播放开场白的工作线程
             self.play_worker = PlayWorker(self.backend_service, opening_line)
             self.play_thread = QThread()
@@ -720,9 +783,11 @@ class ChatWindow(QMainWindow):
         """处理播放完成"""
         self.send_button.setEnabled(True)
         self.send_button.setText("发送")
+        self.exit_button.setEnabled(True)
+        self.exit_button.setText("退出")
 
     def handle_key_press(self, event):
-        """处理输入框的按键事件"""
+        """处理输入框快捷键"""
         # 检查按下Ctrl+Enter后发送信息
         if event.key() == Qt.Key_Return and event.modifiers() == Qt.ControlModifier:
             self.send_message()
@@ -736,23 +801,25 @@ class ChatWindow(QMainWindow):
         if not user_input:  # 忽略空消息
             return
             
-        # 1. 显示用户消息
+        # 显示用户消息
         self.add_user_message(user_input)
         
-        # 2. 清空输入框并重置焦点
+        # 清空输入框并重置焦点
         self.input_field.clear()
         self.input_field.setFocus()
         
-        # 3. 禁用发送按钮防止重复发送
+        # 禁用按钮
         self.send_button.setEnabled(False)
         self.send_button.setText("回复中……")
+        self.exit_button.setEnabled(False)
+        self.exit_button.setText("请稍后……")
         
-        # 4. 创建AI工作线程
+        # 创建AI工作线程
         self.ai_worker = AIWorker(self.backend_service, user_input)
         self.ai_thread = QThread()
         self.ai_worker.moveToThread(self.ai_thread)
         
-        # 5. 连接信号
+        # 连接信号
         self.ai_thread.started.connect(self.ai_worker.run)
         self.ai_worker.response_received.connect(self.handle_ai_response)
         self.ai_worker.error_occurred.connect(self.handle_ai_error)
@@ -763,58 +830,51 @@ class ChatWindow(QMainWindow):
         # 6. 启动线程
         self.ai_thread.start()
 
-    def handle_ai_response(self, ai_reply, should_exit):
+    def handle_ai_response(self, ai_response, should_exit):
         """处理AI回复"""
-        # 1. 显示AI消息
-        self.add_ai_message(ai_reply)
+        # 调用`添加AI消息`
+        self.add_ai_message(ai_response)
         
-        # 2. 添加到前端历史
+        # 添加到前端历史
         self.frontend_history.append({
             "role": "assistant",
-            "content": ai_reply
+            "content": ai_response
         })
 
-        # 3. 检查是否需要退出
+        # 退出标记处理
         if should_exit:
-            # 创建播放TTS的工作线程，即使需要退出也要播放完TTS
-            self.play_worker = PlayWorker(self.backend_service, ai_reply)
-            self.play_thread = QThread()
-            self.play_worker.moveToThread(self.play_thread)
-            
-            # 连接信号 - 播放完成后退出
-            self.play_thread.started.connect(self.play_worker.run)
-            self.play_worker.play_finished.connect(self.handle_exit_after_play)
-            self.play_worker.play_finished.connect(self.play_thread.quit)
-            self.play_thread.finished.connect(self.play_thread.deleteLater)
-
-            # 启动线程
-            self.play_thread.start()
+            self._start_play_thread(ai_response, self.handle_exit_after_play)
         else:
-            # 创建播放TTS的工作线程
-            self.play_worker = PlayWorker(self.backend_service, ai_reply)
-            self.play_thread = QThread()
-            self.play_worker.moveToThread(self.play_thread)
+            self._start_play_thread(ai_response, self.handle_play_finished)
+        
+    def _start_play_thread(self, ai_response, finished_callback):
+        """TTS和播放的工作线程"""
+        # 创建TTS和播放的工作线程
+        self.play_worker = PlayWorker(self.backend_service, ai_response)
+        self.play_thread = QThread()
+        self.play_worker.moveToThread(self.play_thread)
 
-            # 连接信号
-            self.play_thread.started.connect(self.play_worker.run)
-            self.play_worker.play_finished.connect(self.handle_play_finished)
-            self.play_worker.play_finished.connect(self.play_thread.quit)
-            self.play_thread.finished.connect(self.play_thread.deleteLater)
+        # 连接信号
+        self.play_thread.started.connect(self.play_worker.run)
+        self.play_worker.play_finished.connect(finished_callback)
+        self.play_worker.play_finished.connect(self.play_thread.quit)
+        self.play_thread.finished.connect(self.play_thread.deleteLater)
 
-            # 启动线程
-            self.play_thread.start()
+        # 启动线程
+        self.play_thread.start()
 
     def handle_exit_after_play(self):
-        """播放完成后退出程序"""
+        """处理退出标记"""
         self.add_system_message("连接已丢失……")
-        # 延迟3秒后退出程序
-        QTimer.singleShot(3000, QApplication.instance().quit)
+        QTimer.singleShot(2000, QApplication.instance().quit) # 等待2秒退出
 
     def handle_ai_error(self, error_msg):
         """处理AI请求错误"""
         self.add_system_message(error_msg)
         self.send_button.setEnabled(True)
         self.send_button.setText("发送")
+        self.exit_button.setEnabled(True)
+        self.exit_button.setText("退出")
 
     def scroll_to_bottom(self):
         """滚动到底部"""
@@ -833,7 +893,7 @@ class ChatWindow(QMainWindow):
                     scrollbar.setValue(scrollbar.maximum())
                     QApplication.processEvents()
         except Exception as e:
-             print(f"[警告] 滚动到底部失败: {e}")
+             print(f"警告| 滚动到底部失败: {e}")
                 
     def add_user_message(self, message):
         """添加用户消息"""
@@ -856,7 +916,7 @@ class ChatWindow(QMainWindow):
         # 添加到聊天布局
         self.chat_layout.addWidget(container)
         
-        # 滚动到底部
+        # 调用`滚动到底部`
         self.scroll_to_bottom()
 
     def add_ai_message(self, message):
@@ -880,7 +940,7 @@ class ChatWindow(QMainWindow):
         # 添加到聊天布局
         self.chat_layout.addWidget(container)
         
-        # 滚动到底部
+        # 调用`滚动到底部`
         self.scroll_to_bottom()
 
     def add_system_message(self, message):
@@ -901,7 +961,7 @@ class ChatWindow(QMainWindow):
         # 添加到聊天布局
         self.chat_layout.addWidget(container)
         
-        # 滚动到底部
+        # `调用滚动到底部`
         self.scroll_to_bottom()
 
     def clear_chat(self):
@@ -927,8 +987,7 @@ class ChatWindow(QMainWindow):
             self.add_ai_message(opening_line)
 
 class AIWorker(QObject):
-    """处理AI请求的工作线程类，避免阻塞UI线程"""
-    # 自定义信号用于线程间通信
+    """处理AI请求的工作线程类"""
     response_received = pyqtSignal(str, bool)  # AI回复信号和退出标志
     error_occurred = pyqtSignal(str)     # 错误信号
 
@@ -941,8 +1000,8 @@ class AIWorker(QObject):
         """在子线程中执行AI请求"""
         try:
             # 使用后端服务处理用户输入
-            ai_reply, should_exit = self.backend_service.process_user_message(self.user_input, play_tts=False)
-            self.response_received.emit(ai_reply, should_exit)
+            ai_response, should_exit = self.backend_service.process_user_message(self.user_input, play_tts=False)
+            self.response_received.emit(ai_response, should_exit)
             
         except Exception as e:
             # 处理异常并发送错误信号
@@ -960,7 +1019,7 @@ class PlayWorker(QObject):
     def run(self):
         """在子线程中播放TTS"""
         try:
-            # 处理AI回复
+            # 调用`处理AI回复流程`
             self.backend_service.process_ai_response(self.ai_response)
             self.play_finished.emit()
         except Exception as e:
