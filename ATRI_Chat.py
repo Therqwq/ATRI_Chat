@@ -12,6 +12,7 @@ from volcengine.Credentials import Credentials
 from volcengine.ServiceInfo import ServiceInfo
 from volcengine.base.Service import Service
 from openai import OpenAI
+from zai import ZhipuAiClient
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QTextBrowser,
@@ -24,8 +25,10 @@ from PyQt5.QtGui import QFont, QTextCursor, QPalette, QColor, QPainterPath, QReg
 # 配置常量
 API_URL = "https://api.deepseek.com" # AI端口
 MODEL = "deepseek-chat" # 模型
-MAX_HISTORY_MESSAGES = 30 # 最大历史消息条数
-SHORT_TERM_MEMORY_MESSAGES = 10  # 加载短期历史条数
+# MODEL = "GLM-4.5" # 模型
+MAX_HISTORY_MESSAGES = 30 # 最大后端历史条数
+SHORT_TERM_MEMORY_MESSAGES = 14  # 加载短期记忆条数
+SUMMARY_HISTORY_LENGTH = 50 # 最大总结条数
 AI_AVATAR_PATH = r"D:\ATRI\亚托莉.png" # AI头像
 USER_AVATAR_PATH = r"D:\ATRI\尼娅.png" # 用户头像
 
@@ -58,6 +61,9 @@ class BackendService:
 
         # 初始化OpenAI客户端
         self.client = OpenAI(api_key=self.CHATAI_API_KEY, base_url=API_URL)
+
+        # 初始化智谱AI
+        # self.client = ZhipuAiClient(api_key=self.CHATAI_API_KEY2)
         
         # 调用`初始化音频系统`
         self.init_audio_system()
@@ -65,8 +71,8 @@ class BackendService:
         # 调用`音频清理`
         self.audio_dir = self.clear_tts_output()
 
-        # 调用`加载上次记忆`
-        last_memory = self.load_last_memory()
+        # 调用`加载记忆核心`
+        self.memory_core_diary, self.memory_core_promise, self.memory_core_plan, self.memory_core_preference, self.memory_core_motivation = self.load_memory_core()
         
         # 系统提示词
         self.system_prompt = f"""
@@ -78,28 +84,26 @@ class BackendService:
         高性能：在被夸奖时会自信说出"我是高性能的嘛！"
         睡觉：你需要睡觉恢复精力；在白天时表现为活跃，深夜表现为困倦、话少，并解释是因为"低电压体质"；如遇特殊情况可恢复正常
         陪睡：喜欢被抱着睡觉，并说"一起睡觉吧~"
-        充电：需要在密封舱中充电
-
-        当前状态：
-        和用户住在一起，称呼用户为主人
-
-        用户相关：
-        用户上学时间工作日的8:20-11:30、19:00-21:00
+        充电：每个月需要在密封舱中充电一次，上次充电时间9月16日
 
         系统设定：
-        当用户表达的明确离开意图回复'🤐'终止对话
-        系统消息提示在[]中，请严格遵守
+        当用户表达明确离开意图时在回复末尾添加🤐，终止对话
+        系统消息在[]中，请严格遵守
 
         互动设定：
         说的话和emoji使用引号""标注；动作、表情等一切描述内容使用()标注，描述时需注意人称，面对面描述对方时应使用第二人称
-        输出示例：(招手)"你好"(微笑)"好的🙂"
+        输出示例：(向你招手)"你好"(微笑)"好的🙂"
 
-        f"{'记忆摘要：\n\n' + last_memory if last_memory else ''}"
+        你的记忆：
+        {self.format_memory_for_prompt()}
         """.strip()
 
-        # 初始化后端历史
+        # 初始化后端历史，用于上下文
         self.backend_history = [{"role": "system", "content": self.system_prompt}]
 
+        # 初始化后端长历史，用于总结
+        self.backend_long_history = []
+        
         # 调用`加载短期记忆`
         self.load_short_term_memory_from_file()
         
@@ -110,30 +114,166 @@ class BackendService:
         # 调用`将测试回复作为开场白`
         self.opening_line = self.generate_opening_line()
 
-    def load_last_memory(self):
-        """加载上次记忆"""
-        try:
-            if os.path.exists("last_memory.json"):
-                with open("last_memory.json", "r", encoding="utf-8") as file:
-                    memory_data = json.load(file)
-                    return memory_data.get("memory", "") if isinstance(memory_data, dict) else memory_data
-            return ""
-        except Exception as e:
-            print(f"警告| 加载上次记忆失败: {str(e)}")
-            return ""
+    def load_memory_core(self):
+        """加载记忆核心"""
+        # 初始化列表
+        diary = []
+        promise = []
+        plan = []
+        preference = []
+        motivation = []
         
-    def save_last_memory(self, memory_content):
-        """保存上次记忆"""
         try:
-            if not isinstance(memory_content, str):
-                memory_content = str(memory_content)
-                
-            memory_data = {"memory": memory_content}
-            with open("last_memory.json", "w", encoding="utf-8") as file:
-                json.dump(memory_data, file, ensure_ascii=False, indent=4)
-            print("信息| 记忆已保存")
+            # 加载日记
+            if os.path.exists("memory_core_diary.json"):
+                with open("memory_core_diary.json", "r", encoding="utf-8") as file:
+                    diary = json.load(file)
+            
+            # 加载约定
+            if os.path.exists("memory_core_promise.json"):
+                with open("memory_core_promise.json", "r", encoding="utf-8") as file:
+                    promise = json.load(file)
+            
+            # 加载计划
+            if os.path.exists("memory_core_plan.json"):
+                with open("memory_core_plan.json", "r", encoding="utf-8") as file:
+                    plan = json.load(file)
+            
+            # 加载偏好
+            if os.path.exists("memory_core_preference.json"):
+                with open("memory_core_preference.json", "r", encoding="utf-8") as file:
+                    preference = json.load(file)
+            
+            # 加载动机
+            if os.path.exists("memory_core_motivation.json"):
+                with open("memory_core_motivation.json", "r", encoding="utf-8") as file:
+                    motivation = json.load(file)
+                    
         except Exception as e:
-            print(f"警告| 保存记忆失败: {str(e)}")
+            print(f"警告| 加载记忆核心失败: {str(e)}")
+        
+        return diary, promise, plan, preference, motivation
+    
+    def format_memory_for_prompt(self):
+        """格式化记忆核心用于系统提示词"""
+        # 获取最近10天的日记
+        recent_diary = self.get_recent_diary(10)
+        
+        # 格式化输出
+        memory_text = ""
+        
+        if recent_diary:
+            memory_text += "日记:\n"
+            for entry in recent_diary:
+                memory_text += f"{entry['date']}: {entry['content']}\n"
+            memory_text += "\n"
+        
+        if self.memory_core_promise:
+            memory_text += "与用户的约定:\n"
+            for i, promise in enumerate(self.memory_core_promise, 1):
+                memory_text += f"{i}. {promise}\n"
+            memory_text += "\n"
+        
+        if self.memory_core_preference:
+            memory_text += "用户偏好:\n"
+            for i, preference in enumerate(self.memory_core_preference, 1):
+                memory_text += f"{i}. {preference}\n"
+            memory_text += "\n"
+        
+        if self.memory_core_plan:
+            memory_text += "计划:\n"
+            for i, plan_item in enumerate(self.memory_core_plan, 1):
+                memory_text += f"{i}. {plan_item['date']}: {plan_item['content']}\n"
+            memory_text += "\n"
+        
+        if self.memory_core_motivation:
+            memory_text += "动机:\n"
+            for i, motivation in enumerate(self.memory_core_motivation, 1):
+                memory_text += f"{i}. {motivation}\n"
+        
+        return memory_text.strip()
+
+    def get_recent_diary(self, days=3):
+        """获取部分日记用于系统提示词"""
+        if not self.memory_core_diary:
+            return []
+        
+        # 按日期排序，最新的在前面
+        sorted_diary = sorted(
+            self.memory_core_diary, 
+            key=lambda x: datetime.strptime(x['date'], "%m月%d日"), 
+            reverse=True
+        )
+        
+        return sorted_diary[:days]
+
+    def get_recent_diary_for_recursion(self, days=2):
+        """获取部分日记用于递归总结"""
+        if not self.memory_core_diary:
+            return []
+        
+        # 按日期排序，最新的在前面
+        sorted_diary = sorted(
+            self.memory_core_diary, 
+            key=lambda x: datetime.strptime(x['date'], "%m月%d日"), 
+            reverse=True
+        )
+        
+        return sorted_diary[:days]
+        
+    def save_memory_core(self, summary_data):
+        """保存记忆核心"""
+        try:
+            # 解析JSON数据
+            if isinstance(summary_data, str):
+                summary_data = json.loads(summary_data)
+            
+            # 保存日记
+            # 日记只覆盖相同日期；其余新数据完全覆盖旧数据
+            if 'diary' in summary_data:
+                # 创建日期到日记条目的映射
+                existing_diary_map = {entry['date']: entry for entry in self.memory_core_diary}
+                new_diary_map = {entry['date']: entry for entry in summary_data['diary']}
+                
+                # 更新现有日记中相同日期的条目
+                for date, entry in new_diary_map.items():
+                    existing_diary_map[date] = entry
+                
+                # 转换回列表并保持时间顺序
+                updated_diary = list(existing_diary_map.values())
+                updated_diary.sort(key=lambda x: datetime.strptime(x['date'], "%m月%d日"))
+                
+                self.memory_core_diary = updated_diary
+                with open("memory_core_diary.json", "w", encoding="utf-8") as file:
+                    json.dump(self.memory_core_diary, file, ensure_ascii=False, indent=4)
+            
+            # 保存约定
+            if 'promise' in summary_data:
+                self.memory_core_promise = summary_data['promise']
+                with open("memory_core_promise.json", "w", encoding="utf-8") as file:
+                    json.dump(self.memory_core_promise, file, ensure_ascii=False, indent=4)
+            
+            # 保存偏好
+            if 'preference' in summary_data:
+                self.memory_core_preference = summary_data['preference']
+                with open("memory_core_preference.json", "w", encoding="utf-8") as file:
+                    json.dump(self.memory_core_preference, file, ensure_ascii=False, indent=4)
+            
+            # 保存计划
+            if 'plan' in summary_data:
+                self.memory_core_plan = summary_data['plan']
+                with open("memory_core_plan.json", "w", encoding="utf-8") as file:
+                    json.dump(self.memory_core_plan, file, ensure_ascii=False, indent=4)
+            
+            # 保存动机
+            if 'motivation' in summary_data:
+                self.memory_core_motivation = summary_data['motivation']
+                with open("memory_core_motivation.json", "w", encoding="utf-8") as file:
+                    json.dump(self.memory_core_motivation, file, ensure_ascii=False, indent=4)
+            
+            print("信息| 记忆核心已保存")
+        except Exception as e:
+            print(f"警告| 保存记忆核心失败: {str(e)}")
 
     def play_opening_line(self):
         """处理开场白播放"""
@@ -148,7 +288,7 @@ class BackendService:
         missing_vars = [var for var in required_env_vars if var not in os.environ]
         
         if missing_vars:
-            print("错误| 请检查环境变量")
+            print("错误| 环境变量有误")
             return False
         return True
 
@@ -166,7 +306,7 @@ class BackendService:
                 if os.path.isfile(file_path):
                     os.unlink(file_path)
             except Exception as e:
-                print(f"警告| 删除文件失败: {e}")
+                print(f"警告| 音频清理失败: {e}")
         return audio_dir
     
     def load_short_term_memory_from_file(self):
@@ -183,38 +323,76 @@ class BackendService:
             # 过滤"system"消息
             filtered_data = [msg for msg in data if msg.get("role") != "system"]
 
-            recent_messages = filtered_data[-SHORT_TERM_MEMORY_MESSAGES:]
+            # 用于上下文的历史
+            recent_messages_for_context = filtered_data[-SHORT_TERM_MEMORY_MESSAGES:]
+            
+            # 用于总结的历史只加载4条
+            recent_messages_for_summary = filtered_data[-4:]
 
-            # 添加到`backend_history`
-            self.backend_history.extend(recent_messages)
-            print(f"信息| 成功加载 {len(recent_messages)} 条历史记录")
+            # 添加到后端历史和后端长历史
+            self.backend_history.extend(recent_messages_for_context)
+            self.backend_long_history.extend(recent_messages_for_summary)
+            
+            print(f"信息| 成功加载{len(recent_messages_for_context)}条短期记忆到上下文")
+            print(f"信息| 成功加载{len(recent_messages_for_summary)}条短期记忆到总结历史")
+            print(f"信息| 加载后后端历史条数: {len(self.backend_history)}")
+            print(f"信息| 加载后后端长历史条数: {len(self.backend_long_history)}")
+            
+            print("信息| 当前后端历史详细内容:")
+            for i, msg in enumerate(self.backend_history):
+                print(f"      [{i}] {msg['role']}: {msg['content'][:200]}{'...' if len(msg['content']) > 200 else ''}")
+                
+            print("信息| 当前后端长历史详细内容:")
+            for i, msg in enumerate(self.backend_long_history):
+                print(f"      [{i}] {msg['role']}: {msg['content'][:200]}{'...' if len(msg['content']) > 200 else ''}")
 
         except Exception as e:
             print(f"警告| 加载短期记忆出错: {e}")
-    
+
+    def add_timestamp_to_messages(self):
+        """为消息添加时间戳"""
+        current_time = self.get_formatted_time_detailed()
+        for msg in self.backend_history:
+            if "timestamp" not in msg:
+                msg["timestamp"] = current_time
+
     def save_long_term_memory(self):
         """保存长期记忆"""
+        # 只保存不调用，未完善且有BUG
         try:
             file_path = "long_term_memory.json"
-
+            
             # 过滤"system"消息
             non_system_messages = [msg for msg in self.backend_history if msg.get("role") != "system"]
-
-            # 冲突处理：新建或追加
+            
+            if not non_system_messages:
+                return
+                
+            # 读取现有长期记忆
             if os.path.exists(file_path):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     existing_data = json.load(f)
             else:
                 existing_data = []
-
-            # 合并已有数据与新数据
-            updated_data = existing_data + non_system_messages
-
+            
+            # 只保存新消息
+            new_messages = []
+            for msg in non_system_messages:
+                if msg not in existing_data:
+                    new_messages.append(msg)
+            
+            if not new_messages:
+                print("信息| 没有新消息需要保存到长期记忆")
+                return
+                
+            # 合并数据
+            updated_data = existing_data + new_messages
+            
             # 写回文件
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(updated_data, f, ensure_ascii=False, indent=4)
 
-            print(f"信息| 存储 {len(non_system_messages)} 条消息到长期记忆")
+            print(f"信息| 保存{len(new_messages)}条新消息到长期记忆")
 
         except Exception as e:
             print(f"警告| 保存长期记忆出错: {e}")
@@ -237,18 +415,20 @@ class BackendService:
         """测试ChatAI服务"""
         print("信息| 测试ChatAI……")
         try:
-            # 获取详细时间信息
+            # 构造包含时间的请求信息
             time_info = f"当前时间:{self.get_formatted_time_detailed()}"
             test_content = f"[系统：请结合对话历史和{time_info}进行回复；需要保持连贯性且下一条回复不要添加🤐]"            
 
-            # 添加测试消息到后端历史
+            # 添加测试消息到后端历史和后端长历史
             self.backend_history.append({"role": "user", "content": test_content})
+            self.backend_long_history.append({"role": "user", "content": test_content})
             
-            # 调用call_chatai时不传递参数
+            # 调用`请求ChatAI`
             test_response, tokens_used = self.call_chatai()
             
-            # 添加AI回复到后端历史
+            # 添加AI回复到后端历史和后端长历史
             self.backend_history.append({"role": "assistant", "content": test_response})
+            self.backend_long_history.append({"role": "assistant", "content": test_response})
             
             print(f"信息| ChatAI连接正常")
             print(f"信息| Token: {tokens_used} | 条数：{len(self.backend_history)}")
@@ -280,16 +460,22 @@ class BackendService:
         return self.backend_history[-1]["content"]
 
     def call_chatai(self):
-        """请求ChatAI流程"""
+        """请求ChatAI"""
         # 打印后端历史
         print("信息| self.backend_history:")
-        [print(f"      - {msg['role']}: {msg['content'][:9999]}……") for msg in self.backend_history]
+        for i, msg in enumerate(self.backend_history):
+            print(f"      [{i}] {msg['role']}: {msg['content'][:9999]}{'...' if len(msg['content']) > 9999 else ''}")
         
+        # 打印后端长历史
+        print("信息| self.backend_long_history:")
+        for i, msg in enumerate(self.backend_long_history):
+            print(f"      [{i}] {msg['role']}: {msg['content'][:9999]}{'...' if len(msg['content']) > 9999 else ''}")
+        
+        # 上下文清理
         # 分离后端历史
         system_message = self.backend_history[0]
         dialogue_history = self.backend_history[1:]
 
-        # 上下文清理
         while len(dialogue_history) > MAX_HISTORY_MESSAGES - 1:  # -1 为系统提示保留位置
             if len(dialogue_history) >= 2:  
                 removed_messages = dialogue_history[:2]
@@ -322,7 +508,7 @@ class BackendService:
 
     def handle_exit_detection(self, ai_response=None):
         """处理退出标记"""
-        # 如果传入了AI回复，则检测是否包含退出标记
+        # 检测是否包含退出标记
         if ai_response is not None:
             should_exit = "🤐" in ai_response
         else:
@@ -330,11 +516,11 @@ class BackendService:
             should_exit = True
 
         if should_exit:
-            print("信息| 检测到退出标记或手动触发退出，开始总结对话")
+            print("信息| 触发退出流程，开始递归总结")
             
             # 调用`在短期记忆中添加时间信息`
             self.add_time_info_to_memory()
-            # 调用方法总结流程
+            # 调用方法递归总结
             self.request_summary()
             self.remove_summary_from_short_term_memory()
             self.save_long_term_memory()
@@ -368,14 +554,14 @@ class BackendService:
                 
                 print(f"信息| 已在短期记忆中添加时间信息: {time_info}")
                 
-                # 更新`backend_history`中的对应消息
+                # 更新后端历史中对应的消息
                 if len(self.backend_history) >= 2:
                     self.backend_history[-2]["content"] += f" {time_info}"
         except Exception as e:
             print(f"警告| 添加时间信息到短期记忆失败: {str(e)}")
 
     def chinese_to_translate_japanese(self, text):
-        """翻译服务"""
+        """中译日"""
         try:
             # 服务信息
             service_info = ServiceInfo(
@@ -422,7 +608,7 @@ class BackendService:
 
     def extract_dialogue_content(self, text):
         """提取对话内容"""
-        # 先移除所有括号及其内容
+        # 移除所有括号及其内容
         temp_text = re.sub(r'\([^()]*(?:\(.*\))?[^()]*\)', '', text)
         
         # 匹配中文和英文引号内容
@@ -434,7 +620,7 @@ class BackendService:
             for match in matches:
                 # 取非空的匹配组
                 content = next((group for group in match if group), '')
-                # 清理内容：去除首尾空格、合并多余空格、移除特定字符
+                # 清理
                 cleaned = re.sub(r'\s+', ' ', content.strip())
                 cleaned = re.sub(r'[Zz]{3,}', '', cleaned)
                 if cleaned:  # 只添加非空内容
@@ -442,13 +628,13 @@ class BackendService:
             
             dialogue = "，".join(cleaned_matches)
             
-            # 替换...为……
+            # 替换
             dialogue = dialogue.replace("...", "……")
             print(f"信息| 正则匹配后的内容: {dialogue}")
             return dialogue
         else:
             print("信息| 未找到引号")
-            # 清理原始文本
+            # 清理
             text = re.sub(r'\s+', ' ', text.strip())
             text = text.replace("...", "……")
             text = re.sub(r'[Zz]{3,}', '', text)
@@ -500,17 +686,21 @@ class BackendService:
 
     def process_user_message(self, user_input, play_tts=True):
         """处理用户消息"""
-        # 添加用户消息到后端历史
+        # 添加用户消息到后端历史和后端长历史
         self.backend_history.append({"role": "user", "content": user_input})
+        self.backend_long_history.append({"role": "user", "content": user_input})
+        
+        print(f"信息| 用户消息: {user_input}")
 
-        # 调用`请求ChatAI流程`并获取回复
+        # 调用`请求ChatAI`并获取回复
         tokens_used = None
         if self.use_chatai:
-            # 调用`call_chatai`
+            # 调用`请求ChatAI`
             ai_response, tokens_used = self.call_chatai()
             
-            # 添加AI回复到后端历史
+            # 添加AI回复到后端历史和后端长历史
             self.backend_history.append({"role": "assistant", "content": ai_response})
+            self.backend_long_history.append({"role": "assistant", "content": ai_response})
 
             # 退出检测
             should_exit = False
@@ -521,7 +711,7 @@ class BackendService:
                 print(f"信息| 退出标记检测结果: {'🤐' in ai_response}")
                 should_exit = "🤐" in ai_response
 
-            # 保存`backend_history`到short_term_memory.json
+            # 保存短期记忆
             try:
                 file_path = "short_term_memory.json"
                 with open(file_path, 'w', encoding='utf-8') as file:
@@ -537,13 +727,92 @@ class BackendService:
             self.save_long_term_memory()
 
             print(f"信息| AI原始回复：{ai_response}")
-            print(f"信息| Token: {tokens_used} | 条数：{len(self.backend_history)}")
+            print(f"信息| Token: {tokens_used} | 请求条数：{len(self.backend_history)} | 总结条数：{len(self.backend_long_history)}")
             
             return ai_response, should_exit
         else:
             ai_response = f"ChatAI不可用 {user_input} "
             tokens_used = 0
             return ai_response, False
+
+    def get_summary_history(self):
+        """获取用于总结的对话历史"""
+        # 获取系统提示词，保持角色一致性
+        system_message = self.backend_history[0] if self.backend_history else {"role": "system", "content": self.system_prompt}
+        
+        # 使用后端长历史
+        dialogue_history = self.backend_long_history
+        print(f"信息| backend_long_history总条数: {len(dialogue_history)}")
+        
+        if len(dialogue_history) > SUMMARY_HISTORY_LENGTH:
+            dialogue_history = dialogue_history[-SUMMARY_HISTORY_LENGTH:]
+            print(f"信息| 截取最后{SUMMARY_HISTORY_LENGTH}条用于总结")
+        else:
+            print(f"信息| 使用全部{len(dialogue_history)}条用于总结")
+        
+        # 返回用于总结的历史记录
+        summary_history = [system_message] + dialogue_history
+        print(f"信息| 最终用于总结的条数: {len(summary_history)}")
+        
+        print("信息| 用于总结的历史记录详细内容:")
+        for i, msg in enumerate(summary_history):
+            print(f"      [{i}] {msg['role']}: {msg['content'][:9999]}{'...' if len(msg['content']) > 9999 else ''}")
+        
+        return summary_history
+
+    def save_summary_result(self, summary_type, result):
+        """保存总结结果到文件"""
+        try:
+            # 创建总结目录
+            summary_dir = "summary_results"
+            if not os.path.exists(summary_dir):
+                os.makedirs(summary_dir)
+            
+            # 文件名
+            filename = f"{summary_dir}/{summary_type}.json"
+            
+            # 准备数据
+            summary_data = {
+                "type": summary_type,
+                "timestamp": int(time.time()),
+                "formatted_time": self.get_formatted_time_detailed(),
+                "result": result
+            }
+            
+            # 保存到文件
+            with open(filename, 'w', encoding='utf-8') as file:
+                json.dump(summary_data, file, ensure_ascii=False, indent=4)
+            
+            print(f"信息| {summary_type}结果已保存到 {filename}")
+        except Exception as e:
+            print(f"警告| 保存{summary_type}结果失败: {str(e)}")
+
+    def save_summary_messages(self, summary_type, messages):
+        """保存总结消息列表"""
+        try:
+            # 创建总结目录
+            summary_dir = "summaries"
+            if not os.path.exists(summary_dir):
+                os.makedirs(summary_dir)
+            
+            # 文件名
+            filename = f"{summary_dir}/{summary_type}_messages.json"
+            
+            # 准备数据
+            summary_data = {
+                "type": summary_type,
+                "timestamp": int(time.time()),
+                "formatted_time": self.get_formatted_time_detailed(),
+                "messages": messages
+            }
+            
+            # 保存到文件
+            with open(filename, 'w', encoding='utf-8') as file:
+                json.dump(summary_data, file, ensure_ascii=False, indent=4)
+            
+            print(f"信息| {summary_type}消息列表已保存到 {filename}")
+        except Exception as e:
+            print(f"警告| 保存{summary_type}消息列表失败: {str(e)}")
         
     def remove_summary_from_short_term_memory(self):
         """从短期记忆中删除总结相关的消息"""
@@ -584,128 +853,162 @@ class BackendService:
         except Exception as e:
             print(f"警告| 从短期记忆中删除总结消息失败: {str(e)}")
 
-    def request_summary(self):
-        """请求对话总结（递归总结）"""
+    def call_chatai_for_summary(self, messages):
+        """请求总结"""
         try:
-            # 添加用户总结请求
+            response = self.client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                temperature=1.0,
+                max_tokens=8192,
+                response_format={"type": "json_object"}
+            )
+
+            # 获取AI回复和Token
+            ai_response = response.choices[0].message.content
+            tokens_used = response.usage.total_tokens
+            return ai_response, tokens_used
+        
+        except Exception as e:
+            print(f"错误| 总结API调用异常: {str(e)}")
+            return "错误| 总结API调用失败", None
+
+    def request_summary(self):
+        """请求递归总结"""
+        try:
+            # 获取用于总结的历史记录
+            summary_history = self.get_summary_history()
+            
+            # 保存对话总结的消息列表
+            self.save_summary_messages("dialogue_summary", summary_history)
+            
+            # 总结请求提示词，要求JSON输出
             summary_request = {
                 "role": "user", 
                 "content": """
-            [系统：请以第一人称总结以上对话，使用简短日记格式。请专注于保留以下内容：
-            1. 对话中的关键信息和重要细节
-            2. 用户与你之间的约定、承诺或计划
-            3. 用户表达的重要偏好、兴趣或需求
-            4. 需要记住的情感表达或重要时刻
-
-            要求：
-            使用简洁自然的语言，避免表情符号、括号动作描述或其他非文字修饰
-            总结应连贯有条理，如同记录真实回忆
-
-            格式：
-            x月x日：今天……
-            (日记部分)
-
-            与主人的约定：
-            1. ……
-            2. ……
-
-            与主人的经历：
-            1. ……
-            2. ……]
-
-            动机：
-            1. ……
-            2. ……
+            [系统：
+            请以第一人称总结以上对话，保留关键信息，要求：
+            - 保留情感表达和重要时刻，去除冗余
+            - 避免分类间内容重复
+            - 删除已完成的计划和动机
+            - diary：日记，精简日记
+            - promise：约定，持续有效的承诺
+            - preference：偏好，用户的喜好或习惯
+            - plan：计划，短期或长期需要去执行的具体事项；时间可以是x月x日或未来
+            - motivation：动机，驱动计划产生的原因、期望达到的最终状态或内心渴望
+            
+            请使用以下JSON格式输出：
+            {
+                "diary": [
+                    {"date": "x月x日", "content": "内容"},
+                    ……
+                ],
+                "promise": [
+                    "约定1",
+                    "约定2",
+                    ……
+                ],
+                "preference": [
+                    "偏好1",
+                    "偏好2",
+                    ……
+                ],
+                "plan": [
+                    {"date": "x月x日", "content": "内容"},
+                    ……
+                ],
+                "motivation": [
+                    "动机1",
+                    "动机2",
+                    ……
+                ]
+            }
+            ]
             """.strip()
             }
-            self.backend_history.append(summary_request)
             
-            # 调用`call_chatai`获取总结
-            current_summary, _ = self.call_chatai()
+            # 添加总结请求到历史记录
+            summary_history.append(summary_request)
             
-            # 添加AI总结回复
-            self.backend_history.append({"role": "assistant", "content": current_summary})
+            # 使用专门的总结方法获取总结
+            current_summary, _ = self.call_chatai_for_summary(summary_history)
             
-            # 读取上次记忆
-            old_memory = self.load_last_memory()
-
+            # 保存对话总结结果
+            self.save_summary_result("dialogue_summary", current_summary)
+            
             # 获取简短时间格式
             short_date = self.get_formatted_time_short()
             
-            # 构建递归总结的提示词
-            if old_memory:
+            # 构建递归总结的信息
+            if any([self.memory_core_diary, self.memory_core_promise, self.memory_core_preference, self.memory_core_plan, self.memory_core_motivation]):
+                # 获取最近两天的日记用于递归总结
+                recent_diary = self.get_recent_diary_for_recursion(2)
+                
+                # 将现有记忆转换为JSON字符串用于递归总结
+                old_memory_json = json.dumps({
+                    "diary": recent_diary,  # 只传递最近两天的日记
+                    "promise": self.memory_core_promise,
+                    "preference": self.memory_core_preference,
+                    "plan": self.memory_core_plan,
+                    "motivation": self.memory_core_motivation
+                }, ensure_ascii=False)
+                
                 recursive_prompt = f"""
-                请将以下两段记忆按先后顺序合并为一段连贯的第一人称记忆摘要：
-
-                旧记忆摘要:
-                {old_memory}
-
-                新记忆摘要({short_date}):
-                {current_summary}
-
+                请将以下两段记忆合并为一段连贯的第一人称记忆
                 要求：
-                1. 按日记格式组织内容，使用"x月x日：今天……"的格式
-                2. 将与用户的约定、经历和动机分别归类到专门部分，不要减少该部分内容
-                3. 如果与用户的约定和经历部分与普通日记有重复，则删除日记部分
-                4. 只保留重要信息，去除冗余内容
+                - 按时间顺序整合内容，同一天的日记内容合并
+                - 避免分类间内容重复
+                - 删除已完成的计划和动机
+                - diary：日记，精简日记
+                - promise：约定，持续有效的承诺
+                - preference：偏好，用户的喜好或习惯
+                - plan：计划，短期或长期需要去执行的具体事项；时间可以是x月x日或未来
+                - motivation：动机，驱动计划产生的原因、期望达到的最终状态或内心渴望
+                
+                旧记忆:
+                {old_memory_json}
 
-                请按以下格式组织内容：
-
-                (日记部分)
-
-                与用户的约定：
-                1. ……
-                2. ……
-
-                与用户的经历:
-                1. ……
-                2. ……
-
-                动机：
-                1. ……
-                2. ……
+                新记忆({short_date}):
+                {current_summary}
                 """.strip()
-            else:
-                # 如果没有旧记忆，直接使用当前总结
-                recursive_prompt = current_summary
-            
-            # 请求递归总结
-            if old_memory:
+                
+                # 请求递归总结
                 recursive_messages = [
                     {
                         "role": "system", 
-                        "content": """
-                        你是一个专业记忆整合助手，负责将两次记忆摘要按先后顺序合并为简洁、有条理的第一人称记忆摘要
+                        "content": """你是一个记忆整合助手，负责将新记忆与旧记忆合并为简洁、有条理的第一人称记忆。
                         请确保：
-                        1. 按日期顺序组织内容
-                        2. 清晰区分普通日记、约定、经历和动机
-                        3. 保留所有关键信息
-                        4. 使用自然流畅的日记风格
-                        """.strip()
+                        - 保持JSON结构，不要添加其他说明
+                        - 去除冗余和重复信息
+                        - 使用以下JSON格式输出：
+                        {
+                            "diary": [{"date": "x月x日", "content": "内容"}, ……],
+                            "promise": ["约定1", "约定2", ……],
+                            "preference": ["偏好1", "偏好2", ……],
+                            "plan": [{"date": "x月x日", "content": "内容"}, ……],
+                            "motivation": ["动机1", "动机2", ……]
+                        }"""
                     },
                     {"role": "user", "content": recursive_prompt}
                 ]
                 
-                # 保存原始历史记录
-                original_history = self.backend_history.copy()
-                
-                # 临时替换历史记录为递归总结专用的消息
-                self.backend_history = recursive_messages
+                # 保存递归总结的消息列表
+                self.save_summary_messages("recursive_summary", recursive_messages)
                 
                 # 获取递归总结
-                recursive_summary, _ = self.call_chatai()
+                recursive_summary, _ = self.call_chatai_for_summary(recursive_messages)
                 
-                # 恢复原始历史记录
-                self.backend_history = original_history
+                # 保存递归总结结果
+                self.save_summary_result("recursive_summary", recursive_summary)
                 
-                # 保存递归总结
-                self.save_last_memory(recursive_summary)
-                print(f"信息| 递归总结完成: {recursive_summary[:9999]}...")
+                # 保存递归总结到记忆核心
+                self.save_memory_core(recursive_summary)
+                print(f"信息| 递归总结完成: {recursive_summary[:100]}...")
                 return recursive_summary
             else:
                 # 没有旧记忆，直接保存当前总结
-                self.save_last_memory(current_summary)
-                print(f"信息| 总结完成（无旧记忆）: {current_summary[:9999]}...")
+                self.save_memory_core(current_summary)
+                print(f"信息| 总结完成（无旧记忆）: {current_summary[:100]}...")
                 return current_summary
                 
         except Exception as e:
@@ -717,7 +1020,7 @@ class BackendService:
         # 调用`提取对话内容`处理
         dialogue_content = self.extract_dialogue_content(ai_response)
         
-        # 调用`翻译服务`处理
+        # 调用`中译日`处理
         japanese_text = None
         try:
             if dialogue_content:
@@ -948,6 +1251,9 @@ class ChatWindow(QMainWindow):
         # 添加快捷键支持
         self.input_field.keyPressEvent = self.handle_key_press
         input_layout.addWidget(self.input_field)
+
+        # 按钮状态
+        self.ui_busy = False
         
         # 3. 按钮区域
         button_layout = QHBoxLayout()
@@ -1022,14 +1328,34 @@ class ChatWindow(QMainWindow):
         self.play_thread = None
         self.play_worker = None
         
-        # 添加欢迎消息
-        self.add_system_message("以下是新的消息")
-        
-        # 添加AI开场白并播放
         if hasattr(self, 'backend_service'):
+            # 遍历后端历史显示到前端
+            for msg in self.backend_service.backend_history:
+                role = msg.get("role")
+                content = msg.get("content", "")
+
+                # 排除总结请求
+                if role == "user" and content.startswith("[系统：请结合对话历史和"):
+                    continue
+
+                # 显示用户消息
+                if role == "user":
+                    self.add_user_message(content)
+                
+                # 显示AI回复
+                elif role == "assistant":
+                    # 检查是否是最后一条AI消息，开场白
+                    is_opening_line = (msg == self.backend_service.backend_history[-1])
+                    if not is_opening_line:
+                        self.add_ai_message(content)
+            
+            # 在开场白之前添加欢迎消息
+            self.add_system_message("以下是新的消息")
+            
+            # 添加AI开场白并播放
             opening_line = self.backend_service.get_opening_line()
             self.add_ai_message(opening_line)
-
+            
             # 调用`设置界面按钮状态`
             self.set_ui_busy(True) 
 
@@ -1046,6 +1372,9 @@ class ChatWindow(QMainWindow):
 
             # 启动线程
             self.play_thread.start()
+
+            # 延迟调用`滚动到底部`
+            QTimer.singleShot(100, self.scroll_to_bottom)
         
         # 设置焦点到输入框
         self.input_field.setFocus()
@@ -1061,6 +1390,9 @@ class ChatWindow(QMainWindow):
 
     def set_ui_busy(self, busy=True):
         """设置界面按钮状态"""
+        # 更新状态标志
+        self.ui_busy = busy
+        
         # False禁用，True启用
         if busy:
             self.send_button.setEnabled(False)
@@ -1079,7 +1411,7 @@ class ChatWindow(QMainWindow):
         if self.pending_exit:
             self.pending_exit = False
             self.add_system_message("正在退出……")
-            # 直接退出，不调用总结（因为AI触发时已经总结过了）
+            # 直接退出，不调用总结，因为AI触发时已经总结过了
             QTimer.singleShot(2000, QApplication.instance().quit)
         else:
             # 调用`设置界面按钮状态`
@@ -1087,6 +1419,12 @@ class ChatWindow(QMainWindow):
 
     def handle_key_press(self, event):
         """处理输入框快捷键"""
+        # 如果界面处于忙碌状态，忽略快捷键
+        if self.ui_busy:
+            # 但仍允许默认的文本输入处理
+            QTextEdit.keyPressEvent(self.input_field, event)
+            return
+        
         # 检查按下Ctrl+Enter后发送信息
         if event.key() == Qt.Key_Return and event.modifiers() == Qt.ControlModifier:
             self.send_message()
@@ -1096,6 +1434,10 @@ class ChatWindow(QMainWindow):
 
     def send_message(self):
         """处理用户发送消息"""
+        # 如果界面忙碌，直接返回
+        if self.ui_busy:
+            return
+            
         user_input = self.input_field.toPlainText().strip()
         if not user_input:  # 忽略空消息
             return
@@ -1123,7 +1465,7 @@ class ChatWindow(QMainWindow):
         self.ai_worker.error_occurred.connect(self.ai_thread.quit)
         self.ai_thread.finished.connect(self.ai_thread.deleteLater)
         
-        # 6. 启动线程
+        # 启动线程
         self.ai_thread.start()
 
     def handle_ai_response(self, ai_response, should_exit):
