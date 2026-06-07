@@ -1,11 +1,13 @@
 # ATRI_Chat  
 
 ## 项目说明  
+
 <img src="https://github.com/Therqwq/ATRI_Chat/blob/main/image_1.png" alt="image">  
+
 - 本项目是一个端到端的语音对话系统，实现了语音识别、翻译、AI对话和语音合成的完整流程。语音合成部分使用了GPT-SoVITS工具，其他所有组件均由本项目独立开发  
 - 项目素材取自网络、AI生成等，代码编写由Vide Coding完成  
 
-**使用说明请移步至**：`https://www.bilibili.com/video/BV1pRhezaEjW/?spm_id_from=333.1387.homepage.video_card.click`  
+**使用说明和素材请移步至**：`https://www.bilibili.com/video/BV1pRhezaEjW/?spm_id_from=333.1387.homepage.video_card.click`  
 
 ## 版权与法律声明  
 
